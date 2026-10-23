@@ -1,0 +1,8 @@
+{
+  "name": "from-json",
+  "port": 8080,
+  "debug": false,
+  "database": { "host": "localhost", "port": 5432 },
+  "servers": [ { "host": "web1", "port": 8001 }, { "host": "web2", "port": 8002 } ],
+  "tags": ["a", "b"]
+}

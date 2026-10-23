@@ -1,0 +1,6 @@
+.zell/
+build/
+target/
+*.o
+/zconf-example
+example/zconf-example

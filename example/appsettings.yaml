@@ -1,0 +1,10 @@
+name: my-service
+timeout: 15s
+database:
+  host: localhost
+  port: 5432
+servers:
+  - host: web1
+    port: 8080
+  - host: web2
+    port: 8081

@@ -1,0 +1,27 @@
+namespace zconf
+
+// ErrMissing: a field marked @Conf(required: true) has no value in any layer.
+const ErrMissing = error("config: required key is missing")
+
+// ErrEnum: a value is not one of the @Conf(oneOf: "...") values.
+const ErrEnum = error("config: value not allowed")
+
+// ErrParse: a value cannot be converted to the field's type, or a source
+// file is malformed.
+const ErrParse = error("config: cannot parse value")
+
+// ErrSource: a required source (file) could not be read.
+const ErrSource = error("config: cannot read source")
+
+// ErrUnsupported: the struct has a field of a type zconf cannot bind.
+const ErrUnsupported = error("config: unsupported field type")
+
+// keyError wraps a sentinel with the key path and the offending value, so
+// both errors.Is(err, ErrEnum) and the message work.
+func keyError(kind error, key string, value string, detail string) error {
+    var msg = strconv.Quote(key) + " = " + strconv.Quote(value)
+    if detail != "" {
+        msg += " (" + detail + ")"
+    }
+    return errors.Wrap(kind, msg)
+}

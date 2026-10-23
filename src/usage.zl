@@ -1,0 +1,106 @@
+namespace zconf
+
+// Option describes one bindable key of a configuration struct.
+struct Option {
+    // Command-line form of the key: "database:host", "servers:N:host".
+    Key string
+    // Environment variable for the key with the given prefix.
+    Env      string
+    Type     string
+    Default  string
+    OneOf    string
+    Help     string
+    Required bool
+}
+
+// Describe lists the keys of T (nested structs flattened, slice and map
+// elements shown as N and <key>).
+func Describe<T>(envPrefix string) []Option {
+    var out []Option = []
+    describeType(reflect.TypeOf<T>(), "", envPrefix, &out)
+    return out
+}
+
+func describeType(t *reflect.TypeInfo, path string, envPrefix string, out *[]Option) {
+    for f in t.Fields {
+        if !f.Exported {
+            continue
+        }
+        var a = f.Attribute<Conf>()
+        if a != nil && a.skip {
+            continue
+        }
+        describeField(f.Type, JoinKey(path, fieldKey(f)), a, envPrefix, out)
+    }
+}
+
+func describeField(t *reflect.TypeInfo, key string, a *Conf, envPrefix string, out *[]Option) {
+    if t.Kind == reflect.Kind.Struct && t != reflect.TypeOf<time.Duration>() {
+        describeType(t, key, envPrefix, out)
+        return
+    }
+    if t.Kind == reflect.Kind.Slice &&
+        t.Elem.Kind == reflect.Kind.Struct &&
+        t.Elem != reflect.TypeOf<time.Duration>() {
+        describeType(t.Elem, JoinKey(key, "N"), envPrefix, out)
+        return
+    }
+    if t.Kind == reflect.Kind.Map && t.Elem.Kind == reflect.Kind.Struct {
+        describeType(t.Elem, JoinKey(key, "<key>"), envPrefix, out)
+        return
+    }
+    var o = Option{
+        Key: key,
+        Env: strings.ToUpper(envPrefix + strings.Replace(key, Separator, "__")),
+        Type: t.Name,
+    }
+    if a != nil {
+        o.Default = a.default
+        o.OneOf = a.oneOf
+        o.Help = a.help
+        o.Required = a.required
+    }
+    *out = append(*out, o)
+}
+
+// Usage renders the --help text of T: one line per key with its type,
+// allowed values, default, environment variable and description.
+func Usage<T>(envPrefix string) string {
+    var opts = Describe<T>(envPrefix)
+    var keyWidth = 0
+    var typeWidth = 0
+    for o in opts {
+        if len(o.Key) + 2 > keyWidth {
+            keyWidth = len(o.Key) + 2
+        }
+        if len(o.Type) > typeWidth {
+            typeWidth = len(o.Type)
+        }
+    }
+    var b = strings.Builder{}
+    b.Write("Options:\n")
+    for o in opts {
+        var line = "  " +
+            strings.PadRight("--" + o.Key, keyWidth, " ") +
+            "  " +
+            strings.PadRight(o.Type, typeWidth, " ")
+        if o.OneOf != "" {
+            line += "  {" + strings.Join(splitList(o.OneOf), "|") + "}"
+        }
+        if o.Default != "" {
+            line += "  (default " + strconv.Quote(o.Default) + ")"
+        }
+        if o.Required {
+            line += "  (required)"
+        }
+        if envPrefix != "" {
+            line += "  [env " + o.Env + "]"
+        }
+        if o.Help != "" {
+            line += "  " + o.Help
+        }
+        b.Write(line + "\n")
+    }
+    b.Write("\nBuilt-in flags:\n  --help, -h, -?  print this help and exit\n")
+    return b.String()
+}

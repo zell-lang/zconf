@@ -1,0 +1,177 @@
+namespace zconf
+
+// Separator between the levels of a key path: "servers:0:host".
+const Separator = ":"
+
+// Config is the merged, flat configuration: every key is a path such as
+// "database:host" and every value is a string. Keys are case-insensitive.
+struct Config {
+    values  map[string]string
+    present map[string]bool
+
+    // New returns an empty configuration.
+    static func New() Config {
+        return Config{values: map[string]string{}, present: map[string]bool{}}
+    }
+
+    // Set stores value under key, replacing an earlier value.
+    func Set(key string, value string) {
+        var k = NormalizeKey(key)
+        this.values[k] = value
+        this.present[k] = true
+    }
+
+    // Merge copies every key of layer over this configuration (last wins,
+    // per key). A value replaces whatever the earlier layers had at that
+    // exact place in the tree: a scalar "tags" drops "tags:0", "tags:1",
+    // and "tags:0" drops a scalar "tags".
+    func Merge(layer map[string]string) {
+        for k, _ in layer {
+            this.removeConflicts(NormalizeKey(k))
+        }
+        for k, v in layer {
+            this.Set(k, v)
+        }
+    }
+
+    func removeConflicts(key string) {
+        var drop []string = []
+        for k, _ in this.values {
+            if strings.HasPrefix(k, key + Separator) || strings.HasPrefix(key, k + Separator) {
+                drop = append(drop, k)
+            }
+        }
+        for k in drop {
+            delete(this.values, k)
+            delete(this.present, k)
+        }
+    }
+
+    // Has reports whether key holds a value.
+    func Has(key string) bool {
+        return this.present[NormalizeKey(key)]
+    }
+
+    // Exists reports whether key holds a value or has children.
+    func Exists(key string) bool {
+        return this.Has(key) || len(this.GetChildren(key)) > 0
+    }
+
+    // GetString returns the value of key, or "".
+    func GetString(key string) string {
+        return this.values[NormalizeKey(key)]
+    }
+
+    // GetInt returns the value of key as an int, or fallback when the key
+    // is missing or not a number.
+    func GetInt(key string, fallback int) int {
+        if !this.Has(key) {
+            return fallback
+        }
+        return try strings.ToInt(strings.Trim(this.GetString(key))) else fallback
+    }
+
+    // GetBool returns the value of key as a bool, or fallback.
+    func GetBool(key string, fallback bool) bool {
+        if !this.Has(key) {
+            return fallback
+        }
+        return try strconv.ParseBool(
+            strings.ToLower(strings.Trim(this.GetString(key))),
+        ) else fallback
+    }
+
+    // GetChildren returns the distinct next-level segments under key,
+    // numbers in numeric order first, then names alphabetically.
+    func GetChildren(key string) []string {
+        var prefix = NormalizeKey(key)
+        if prefix != "" {
+            prefix += Separator
+        }
+        var seen = map[string]bool{}
+        var out []string = []
+        for k, _ in this.values {
+            if !strings.HasPrefix(k, prefix) || len(k) == len(prefix) {
+                continue
+            }
+            var rest = k[len(prefix)..]
+            var i = strings.Index(rest, Separator)
+            var child = rest
+            if i >= 0 {
+                child = rest[..i]
+            }
+            if !seen[child] {
+                seen[child] = true
+                out = append(out, child)
+            }
+        }
+        slices.SortFunc(out, childLess)
+        return out
+    }
+
+    // Section returns the sub-tree under key with the prefix removed.
+    func Section(key string) Config {
+        var prefix = NormalizeKey(key) + Separator
+        var out = Config.New()
+        for k, v in this.values {
+            if strings.HasPrefix(k, prefix) {
+                out.Set(k[len(prefix)..], v)
+            }
+        }
+        return out
+    }
+
+    // Keys returns every key, sorted.
+    func Keys() []string {
+        return maps.SortedKeys(this.values)
+    }
+
+    // Dump renders the configuration as "key = value" lines.
+    func Dump() string {
+        var b = strings.Builder{}
+        for k in this.Keys() {
+            b.Write(k + " = " + this.values[k] + "\n")
+        }
+        return b.String()
+    }
+}
+
+// NormalizeKey lower-cases a key and trims separators at both ends.
+func NormalizeKey(key string) string {
+    var k = strings.ToLower(strings.Trim(key))
+    k = strings.TrimPrefix(k, Separator)
+    k = strings.TrimSuffix(k, Separator)
+    return k
+}
+
+// JoinKey joins two path segments with the separator.
+func JoinKey(parent string, child string) string {
+    if parent == "" {
+        return child
+    }
+    return parent + Separator + child
+}
+
+func isIndex(s string) bool {
+    if s == "" {
+        return false
+    }
+    for c in s {
+        if c < '0' || c > '9' {
+            return false
+        }
+    }
+    return true
+}
+
+func childLess(a string, b string) bool {
+    var ai = isIndex(a)
+    var bi = isIndex(b)
+    if ai && bi {
+        return (try strings.ToInt(a) else 0) < (try strings.ToInt(b) else 0)
+    }
+    if ai != bi {
+        return ai
+    }
+    return a < b
+}

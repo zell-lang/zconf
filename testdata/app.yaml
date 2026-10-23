@@ -1,0 +1,7 @@
+name: from-yaml
+timeout: 15s
+database:
+  host: yaml-db
+servers:
+  - host: y1
+    port: 9001

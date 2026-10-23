@@ -1,0 +1,71 @@
+namespace zconf
+
+@test func TestConfigKeysAreCaseInsensitive(t *testing.T) {
+    var c = Config.New()
+    c.Set("Database:Host", "db")
+    testing.Equal(t, c.GetString("database:host"), "db")
+    testing.Equal(t, c.GetString("DATABASE:HOST"), "db")
+    testing.True(t, c.Has("database:host"), "c.Has(\"database:host\")")
+    testing.False(t, c.Has("database:port"), "c.Has(\"database:port\")")
+    testing.True(t, c.Exists("database"), "c.Exists(\"database\")")
+}
+
+@test func TestConfigTypedGetters(t *testing.T) {
+    var c = Config.New()
+    c.Set("port", "5432")
+    c.Set("ssl", "TRUE")
+    c.Set("bad", "x")
+    testing.Equal(t, c.GetInt("port", 0), 5432)
+    testing.Equal(t, c.GetInt("bad", 7), 7)
+    testing.Equal(t, c.GetInt("missing", 9), 9)
+    testing.True(t, c.GetBool("ssl", false), "c.GetBool(\"ssl\", false)")
+}
+
+@test func TestConfigChildrenAndSection(t *testing.T) {
+    var c = Config.New()
+    c.Set("servers:10:host", "c")
+    c.Set("servers:2:host", "b")
+    c.Set("servers:0:host", "a")
+    c.Set("db:host", "h")
+    c.Set("db:port", "1")
+    testing.EqualSlices(t, c.GetChildren("servers"), ["0", "2", "10"])
+    testing.EqualSlices(t, c.GetChildren(""), ["db", "servers"])
+    var db = c.Section("db")
+    testing.Equal(t, db.GetString("host"), "h")
+    testing.EqualSlices(t, db.Keys(), ["host", "port"])
+}
+
+@test func TestMergeLastLayerWinsPerKey(t *testing.T) {
+    var b = NewBuilder()
+    b.AddInMemory(map[string]string{
+        "database:host": "localhost",
+        "database:port": "5432",
+    }).AddEnvironment("APP_", ["APP_DATABASE__HOST=prod-db", "UNRELATED=1"])
+    var cfg = try b.Build() catch err {
+        t.Fatal(err.Message())
+        return
+    }
+    testing.Equal(t, cfg.GetString("database:host"), "prod-db")
+    testing.Equal(t, cfg.GetInt("database:port", 0), 5432)
+    testing.False(t, cfg.Has("unrelated"), "cfg.Has(\"unrelated\")")
+}
+
+@test func TestMergeOrderAcrossFiles(t *testing.T) {
+    var b = NewBuilder()
+    b.AddJsonFile("testdata/app.json", false).AddYamlFile("testdata/app.yaml", false).AddTomlFile(
+        "testdata/app.toml",
+        false,
+    )
+    var cfg = try b.Build() catch err {
+        t.Fatal(err.Message())
+        return
+    }
+    testing.Equal(t, cfg.GetString("name"), "from-toml")
+    testing.Equal(t, cfg.GetString("database:host"), "yaml-db")
+    testing.Equal(t, cfg.GetString("database:port"), "6432")
+    testing.Equal(t, cfg.GetString("port"), "8080")
+    // Arrays merge per element and per key: servers:0 comes from TOML,
+    // servers:1 survives from JSON.
+    testing.Equal(t, cfg.GetString("servers:0:host"), "t1")
+    testing.Equal(t, cfg.GetString("servers:1:host"), "web2")
+}

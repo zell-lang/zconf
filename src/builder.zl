@@ -1,0 +1,85 @@
+namespace zconf
+
+// Builder collects layers in order; the last layer wins per key.
+//
+//   var b = zconf.NewBuilder()
+//   b.AddYamlFile("appsettings.yaml", false)
+//       .AddYamlFile("appsettings.local.yaml", true)
+//       .AddEnvironmentVariables("APP_")
+//   var cfg = b.Build()?
+struct Builder {
+    sources   []Source
+    envPrefix string
+
+    // Add appends a custom layer.
+    func Add(s Source) *Builder {
+        this.sources = append(this.sources, s)
+        return this
+    }
+
+    // AddJsonFile adds a JSON file; optional files may be missing.
+    func AddJsonFile(path string, optional bool) *Builder {
+        return this.Add(FileSource{Path: path, Format: "json", Optional: optional})
+    }
+
+    // AddYamlFile adds a YAML file.
+    func AddYamlFile(path string, optional bool) *Builder {
+        return this.Add(FileSource{Path: path, Format: "yaml", Optional: optional})
+    }
+
+    // AddTomlFile adds a TOML file.
+    func AddTomlFile(path string, optional bool) *Builder {
+        return this.Add(FileSource{Path: path, Format: "toml", Optional: optional})
+    }
+
+    // AddDotEnvFile adds a .env file, read like environment variables with
+    // prefix (the process environment is not changed).
+    func AddDotEnvFile(path string, prefix string, optional bool) *Builder {
+        return this.Add(FileSource{
+            Path: path,
+            Format: "dotenv",
+            Optional: optional,
+            Prefix: prefix,
+        })
+    }
+
+    // AddEnvironmentVariables adds the process environment variables that
+    // start with prefix ("" = all of them).
+    func AddEnvironmentVariables(prefix string) *Builder {
+        if this.envPrefix == "" {
+            this.envPrefix = prefix
+        }
+        return this.Add(EnvSource{Prefix: prefix})
+    }
+
+    // AddEnvironment adds explicit "KEY=value" lines, read like
+    // AddEnvironmentVariables (useful in tests).
+    func AddEnvironment(prefix string, vars []string) *Builder {
+        return this.Add(EnvSource{Prefix: prefix, Vars: vars})
+    }
+
+    // AddCommandLine adds "--key=value" / "--key value" arguments.
+    func AddCommandLine(args []string) *Builder {
+        return this.Add(ArgsSource{Args: args})
+    }
+
+    // AddInMemory adds a map of keys to values.
+    func AddInMemory(values map[string]string) *Builder {
+        return this.Add(MapSource{Values: values})
+    }
+
+    // Build reads every layer in order and merges them.
+    func Build() Config! {
+        var cfg = Config.New()
+        for s in this.sources {
+            var layer = s.Load()?(s.Name())
+            cfg.Merge(layer)
+        }
+        return cfg
+    }
+}
+
+// NewBuilder returns an empty builder.
+func NewBuilder() *Builder {
+    return new Builder{sources: []}
+}

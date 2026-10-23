@@ -1,0 +1,60 @@
+namespace zconf
+
+// ArgsSource reads command-line arguments: "--a:b=c", "--a:b c" and a
+// bare "--flag" (= "true"). "__" also works as the separator
+// ("--db__host=x"). Arguments that are not flags, and the built-in
+// --help flags, are skipped.
+struct ArgsSource {
+    Args []string
+
+    func Load() map[string]string! {
+        var out = map[string]string{}
+        var i = 0
+        for i < len(this.Args) {
+            var a = this.Args[i]
+            i += 1
+            if !strings.HasPrefix(a, "--") || a == "--" || isHelpFlag(a) {
+                continue
+            }
+            var body = a[2..]
+            var eq = strings.Index(body, "=")
+            var key string
+            var value string
+            if eq >= 0 {
+                key = body[..eq]
+                value = body[eq + 1..]
+            } else {
+                key = body
+                if i < len(this.Args) && !strings.HasPrefix(this.Args[i], "--") {
+                    value = this.Args[i]
+                    i += 1
+                } else {
+                    value = "true"
+                }
+            }
+            if key == "" {
+                return errors.Wrap(ErrParse, "bad argument " + strconv.Quote(a))
+            }
+            out[NormalizeKey(strings.Replace(key, "__", Separator))] = value
+        }
+        return out
+    }
+
+    func Name() string {
+        return "command line"
+    }
+}
+
+// HelpRequested reports whether args ask for help (--help, -h, -?, /?).
+func HelpRequested(args []string) bool {
+    for a in args {
+        if isHelpFlag(a) {
+            return true
+        }
+    }
+    return false
+}
+
+func isHelpFlag(a string) bool {
+    return a == "--help" || a == "-h" || a == "-?" || a == "/?" || a == "-help"
+}

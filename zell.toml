@@ -1,0 +1,4 @@
+[package]
+name = "zconf"
+version = "0.1.0"
+namespace = "zconf"

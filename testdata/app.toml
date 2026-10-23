@@ -1,0 +1,9 @@
+name = "from-toml"
+mode = "PROD"
+
+[database]
+port = 6432
+
+[[servers]]
+host = "t1"
+port = 7001

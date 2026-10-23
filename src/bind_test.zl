@@ -1,0 +1,135 @@
+namespace zconf
+
+struct Server {
+    Host string
+    Port int
+}
+
+struct Database {
+    @Conf(default: "localhost") Host string
+    @Conf(default: "5432")      Port int
+}
+
+struct Settings {
+    @Conf(default: "app", help: "service name") Name string
+    @Conf(default: "8080", help: "listen port") Port int
+    Debug bool
+    @Conf(oneOf: "dev,prod", default: "dev", help: "run mode") Mode    string
+    @Conf(default: "30s")                                      Timeout time.Duration
+    @json(name: "ratio")                                       Weight  float
+    Database Database
+    Servers  []Server
+    Tags     []string
+    Labels   map[string]string
+    @Conf(skip: true) Internal string
+}
+
+struct Secrets {
+    @Conf(required: true) Token string
+}
+
+func load<T>(b *Builder, t *testing.T) T {
+    var out T
+    out = try Load<T>(b, []) catch err {
+        t.Fatal(err.Message())
+        return out
+    }
+    return out
+}
+
+@test func TestDefaultsOnEmptyConfig(t *testing.T) {
+    var s = load<Settings>(NewBuilder(), t)
+    testing.Equal(t, s.Name, "app")
+    testing.Equal(t, s.Port, 8080)
+    testing.Equal(t, s.Mode, "dev")
+    testing.Equal(t, s.Timeout.Seconds(), 30.0)
+    testing.Equal(t, s.Database.Host, "localhost")
+    testing.Equal(t, s.Database.Port, 5432)
+    testing.Equal(t, len(s.Servers), 0)
+}
+
+@test func TestBindFromLayers(t *testing.T) {
+    var b = NewBuilder()
+    b.AddJsonFile("testdata/app.json", false).AddTomlFile(
+        "testdata/app.toml",
+        false,
+    ).AddEnvironment("APP_", [
+        "APP_SERVERS__0__HOST=env",
+        "APP_LABELS__TEAM=core",
+        "APP_RATIO=0.25",
+    ])
+    var s = try Load<Settings>(b, ["--debug", "--tags=x,y,z", "--internal=nope"]) catch err {
+        t.Fatal(err.Message())
+        return
+    }
+    testing.Equal(t, s.Name, "from-toml")
+    testing.Equal(t, s.Mode, "prod")
+    testing.True(t, s.Debug, "s.Debug")
+    testing.Equal(t, s.Weight, 0.25)
+    testing.Equal(t, s.Database.Host, "localhost")
+    testing.Equal(t, s.Database.Port, 6432)
+    testing.Equal(t, len(s.Servers), 2)
+    testing.Equal(t, s.Servers[0].Host, "env")
+    testing.Equal(t, s.Servers[0].Port, 7001)
+    testing.Equal(t, s.Servers[1].Host, "web2")
+    testing.EqualSlices(t, s.Tags, ["x", "y", "z"])
+    testing.Equal(t, s.Labels["team"], "core")
+    testing.Equal(t, s.Internal, "")
+}
+
+@test func TestEnvBuildsArrayOfObjects(t *testing.T) {
+    var s = load<Settings>(NewBuilder().AddEnvironment("MYAPP_", [
+        "MYAPP_SERVERS__0__HOST=a",
+        "MYAPP_SERVERS__0__PORT=10",
+        "MYAPP_SERVERS__3__HOST=b",
+        "MYAPP_SERVERS__3__PORT=20",
+    ]), t)
+    testing.Equal(t, len(s.Servers), 2)
+    testing.Equal(t, s.Servers[1].Host, "b")
+    testing.Equal(t, s.Servers[1].Port, 20)
+}
+
+@test func TestEnumViolation(t *testing.T) {
+    try Load<Settings>(NewBuilder(), ["--mode=staging"]) catch err {
+        testing.ErrorIs(t, err, ErrEnum)
+        testing.Contains(t, err.Message(), "\"mode\" = \"staging\"")
+        testing.Contains(t, err.Message(), "allowed: dev, prod")
+        return
+    }
+    t.Error("staging is not an allowed mode")
+}
+
+@test func TestParseErrorNamesTheKey(t *testing.T) {
+    try Load<Settings>(NewBuilder().AddEnvironment("", ["SERVERS__1__PORT=http"]), []) catch err {
+        testing.ErrorIs(t, err, ErrParse)
+        testing.Contains(t, err.Message(), "\"servers:1:port\" = \"http\"")
+        return
+    }
+    t.Error("a non-numeric port must fail")
+}
+
+@test func TestRequiredKey(t *testing.T) {
+    try Load<Secrets>(NewBuilder(), []) catch err {
+        testing.ErrorIs(t, err, ErrMissing)
+        testing.Contains(t, err.Message(), "token")
+        return
+    }
+    t.Error("token is required")
+}
+
+@test func TestUsage(t *testing.T) {
+    var u = Usage<Settings>("APP_")
+    t.Log(u)
+    testing.Contains(t, u, "--Mode")
+    testing.Contains(t, u, "{dev|prod}")
+    testing.Contains(t, u, "(default \"8080\")")
+    testing.Contains(t, u, "--Servers:N:Host")
+    testing.Contains(t, u, "[env APP_DATABASE__HOST]")
+    testing.Contains(t, u, "--ratio")
+    testing.False(t, strings.Contains(u, "Internal"), "strings.Contains(u, \"Internal\")")
+}
+
+@test func TestHelpRequested(t *testing.T) {
+    testing.True(t, HelpRequested(["--port=1", "-h"]), "HelpRequested([\"--port=1\", \"-h\"])")
+    testing.False(t, HelpRequested(["--port=1"]), "HelpRequested([\"--port=1\"])")
+}

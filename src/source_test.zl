@@ -1,0 +1,99 @@
+namespace zconf
+
+func build(b *Builder, t *testing.T) Config {
+    return try b.Build() catch err {
+        t.Fatal(err.Message())
+        return Config.New()
+    }
+}
+
+@test func TestJsonFile(t *testing.T) {
+    var cfg = build(NewBuilder().AddJsonFile("testdata/app.json", false), t)
+    testing.Equal(t, cfg.GetString("name"), "from-json")
+    testing.Equal(t, cfg.GetString("port"), "8080")
+    testing.Equal(t, cfg.GetString("debug"), "false")
+    testing.Equal(t, cfg.GetString("servers:1:port"), "8002")
+    testing.Equal(t, cfg.GetString("tags:1"), "b")
+}
+
+@test func TestYamlFile(t *testing.T) {
+    var cfg = build(NewBuilder().AddYamlFile("testdata/app.yaml", false), t)
+    testing.Equal(t, cfg.GetString("timeout"), "15s")
+    testing.Equal(t, cfg.GetString("servers:0:host"), "y1")
+}
+
+@test func TestTomlFile(t *testing.T) {
+    var cfg = build(NewBuilder().AddTomlFile("testdata/app.toml", false), t)
+    testing.Equal(t, cfg.GetString("mode"), "PROD")
+    testing.Equal(t, cfg.GetString("database:port"), "6432")
+    testing.Equal(t, cfg.GetString("servers:0:port"), "7001")
+}
+
+@test func TestDotEnvFile(t *testing.T) {
+    var cfg = build(NewBuilder().AddDotEnvFile("testdata/app.env", "APP_", false), t)
+    testing.Equal(t, cfg.GetString("name"), "from-dotenv")
+    testing.Equal(t, cfg.GetString("database:host"), "env-db")
+    testing.Equal(t, cfg.GetString("greeting"), "hello\nworld")
+    testing.Equal(t, cfg.GetString("token"), "as $is")
+    testing.Equal(t, cfg.GetString("plain"), "value")
+    testing.False(t, cfg.Has("other"), "cfg.Has(\"other\")")
+}
+
+@test func TestOptionalAndRequiredFiles(t *testing.T) {
+    var cfg = build(NewBuilder().AddJsonFile("testdata/missing.json", true), t)
+    testing.Equal(t, len(cfg.Keys()), 0)
+    try NewBuilder().AddJsonFile("testdata/missing.json", false).Build() catch err {
+        testing.ErrorIs(t, err, ErrSource)
+        testing.Contains(t, err.Message(), "missing.json")
+        return
+    }
+    t.Error("a missing required file must fail")
+}
+
+@test func TestMalformedFileIsParseError(t *testing.T) {
+    try ParseText("json", "{\"a\": ", "") catch err {
+        testing.Contains(t, err.Message(), "json")
+        return
+    }
+    t.Error("malformed JSON must fail")
+}
+
+@test func TestEnvironmentArraysOfObjects(t *testing.T) {
+    var cfg = build(NewBuilder().AddEnvironment("MYAPP_", [
+        "MYAPP_SERVERS__0__HOST=a",
+        "MYAPP_SERVERS__0__PORT=10",
+        "MYAPP_SERVERS__1__HOST=b",
+        "myapp_servers__1__port=20",
+        "PATH=/usr/bin",
+    ]), t)
+    testing.EqualSlices(t, cfg.Keys(), [
+        "servers:0:host",
+        "servers:0:port",
+        "servers:1:host",
+        "servers:1:port",
+    ])
+}
+
+@test func TestProcessEnvironment(t *testing.T) {
+    // The test binary inherits the environment of `zell test`; PATH is
+    // practically always set.
+    var cfg = build(NewBuilder().AddEnvironmentVariables(""), t)
+    testing.True(t, cfg.Has("path"), "cfg.Has(\"path\")")
+}
+
+@test func TestCommandLine(t *testing.T) {
+    var cfg = build(NewBuilder().AddCommandLine([
+        "--a:b=c",
+        "--db:port",
+        "5433",
+        "--verbose",
+        "--servers__0__host=x",
+        "positional",
+        "--help",
+    ]), t)
+    testing.Equal(t, cfg.GetString("a:b"), "c")
+    testing.Equal(t, cfg.GetString("db:port"), "5433")
+    testing.Equal(t, cfg.GetString("verbose"), "true")
+    testing.Equal(t, cfg.GetString("servers:0:host"), "x")
+    testing.False(t, cfg.Has("help"), "cfg.Has(\"help\")")
+}

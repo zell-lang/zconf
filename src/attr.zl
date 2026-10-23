@@ -1,0 +1,28 @@
+namespace zconf
+
+// Conf is the field attribute read by Load and Usage:
+//
+//   struct Settings {
+//       @zconf.Conf(name: "listen_addr", default: "0.0.0.0", help: "listen host") Host string
+//       @zconf.Conf(oneOf: "dev,prod", default: "dev") Mode string
+//       @zconf.Conf(required: true) Token string
+//   }
+//
+// The key name comes from Conf.name, then @json(name:), then the field
+// name; matching is case-insensitive.
+@attribute(targets: [reflect.Target.Field])
+struct Conf {
+    // Key name of the field (default: @json name, then the field name).
+    name string = ""
+    // Value used when no layer sets the key.
+    default string = ""
+    // Comma-separated closed set of allowed values (case-insensitive,
+    // normalized to the spelling in the list).
+    oneOf string = ""
+    // Fail with ErrMissing when no layer and no default set the key.
+    required bool = false
+    // Description shown by Usage and --help.
+    help string = ""
+    // Leave the field out of binding and usage.
+    skip bool = false
+}

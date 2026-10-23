@@ -1,0 +1,124 @@
+namespace zconf
+
+// Source is one configuration layer: it produces flat "path -> value"
+// pairs. Implement it to plug in a custom source.
+interface Source {
+    // Load reads the layer.
+    func Load() map[string]string!
+
+    // Name describes the layer in errors ("json file app.json").
+    func Name() string
+}
+
+// MapSource is an in-memory layer.
+struct MapSource {
+    Values map[string]string
+
+    func Load() map[string]string! {
+        var out = map[string]string{}
+        for k, v in this.Values {
+            out[NormalizeKey(k)] = v
+        }
+        return out
+    }
+
+    func Name() string {
+        return "in-memory map"
+    }
+}
+
+// FileSource reads a JSON, YAML, TOML or .env file. A missing optional
+// file is an empty layer; a missing required file fails with ErrSource.
+struct FileSource {
+    Path string
+    // "json", "yaml", "toml" or "dotenv".
+    Format   string
+    Optional bool
+    // For "dotenv": the variable prefix to strip (see EnvSource).
+    Prefix string
+
+    func Load() map[string]string! {
+        if !fs.Exists(this.Path) {
+            if this.Optional {
+                return map[string]string{}
+            }
+            return errors.Wrap(ErrSource, this.Path + ": file not found")
+        }
+        var text = try io.ReadFile(this.Path) catch err {
+            return errors.Wrap(ErrSource, this.Path + ": " + err.Message())
+        }
+        var out = try ParseText(this.Format, text, this.Prefix) catch err {
+            return errors.Wrap(ErrParse, this.Path + ": " + err.Message())
+        }
+        return out
+    }
+
+    func Name() string {
+        return this.Format + " file " + this.Path
+    }
+}
+
+// ParseText flattens a document of the given format ("json", "yaml",
+// "toml", "dotenv") into "path -> value" pairs.
+func ParseText(format string, text string, prefix string) map[string]string! {
+    var out = map[string]string{}
+    switch format {
+        case "json": flattenJson(encoding.json.ParseValue(text)?, "", out)
+        case "yaml": flattenYaml(encoding.yaml.ParseValue(text)?, "", out)
+        case "toml": flattenToml(encoding.toml.ParseValue(text)?, "", out)
+        case "dotenv": return ParseDotEnv(text, prefix)?
+        default:
+            return error("unknown format " + strconv.Quote(format))
+    }
+    return out
+}
+
+func flattenJson(v encoding.json.Value, path string, out map[string]string) {
+    if v.IsObject() {
+        for k in v.Keys() {
+            flattenJson(v.Get(k), JoinKey(path, strings.ToLower(k)), out)
+        }
+    } else if v.IsArray() {
+        for i, item in v.Items() {
+            flattenJson(item, JoinKey(path, strconv.Itoa(i)), out)
+        }
+    } else if v.IsString() {
+        out[path] = try v.String() else ""
+    } else if v.IsNull() {
+        out[path] = ""
+    } else {
+        out[path] = v.Format()
+    }
+}
+
+func flattenYaml(v encoding.yaml.Value, path string, out map[string]string) {
+    if v.IsMap() {
+        for k in v.Keys() {
+            flattenYaml(v.Get(k), JoinKey(path, strings.ToLower(k)), out)
+        }
+    } else if v.IsSeq() {
+        for i, item in v.Items() {
+            flattenYaml(item, JoinKey(path, strconv.Itoa(i)), out)
+        }
+    } else if v.IsNull() {
+        out[path] = ""
+    } else {
+        out[path] = v.Text()
+    }
+}
+
+func flattenToml(v encoding.toml.Value, path string, out map[string]string) {
+    if v.IsTable() {
+        for k in v.Keys() {
+            flattenToml(v.Get(k), JoinKey(path, strings.ToLower(k)), out)
+        }
+    } else if v.IsArray() {
+        for i, item in v.Items() {
+            flattenToml(item, JoinKey(path, strconv.Itoa(i)), out)
+        }
+    } else if v.IsString() {
+        out[path] = try v.String() else ""
+    } else {
+        out[path] = v.Format()
+    }
+}

@@ -1,0 +1,8 @@
+[package]
+name = "zconf-example"
+version = "0.1.0"
+namespace = "demo"
+entry = "src/main.zl"
+
+[dependencies]
+zconf = { path = ".." }

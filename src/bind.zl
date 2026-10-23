@@ -1,0 +1,195 @@
+namespace zconf
+
+// Load is the one-call entry point: when args ask for help it prints
+// Usage<T> and exits with status 0; otherwise it adds args as the last
+// (highest-priority) layer, builds the configuration and binds it into a
+// T. Pass os.Args()[1..] as args, or [] to ignore the command line.
+func Load<T>(b *Builder, args []string) T! {
+    if HelpRequested(args) {
+        io.print(Usage<T>(b.envPrefix))
+        os.Exit(0)
+    }
+    if len(args) > 0 {
+        b.AddCommandLine(args)
+    }
+    var cfg = b.Build()?
+    return Bind<T>(cfg)?
+}
+
+// Bind fills a T from cfg. Fields are matched by key name (@Conf(name:),
+// then @json(name:), then the field name, case-insensitively); nested
+// structs are sections, slices are indexed children ("servers:0:host")
+// or a comma-separated value, maps are named children. Missing keys keep
+// the zero value, or @Conf(default:).
+func Bind<T>(cfg Config) T! {
+    var out T
+    bindValue(&cfg, "", nil, &out)?
+    return out
+}
+
+func bindStruct<T>(cfg *Config, path string, out *T) void! {
+    for f in reflect.Fields<T>() {
+        if !f.Exported {
+            continue
+        }
+        var a = f.Attribute<Conf>()
+        if a != nil && a.skip {
+            continue
+        }
+        var key = JoinKey(path, strings.ToLower(fieldKey(f)))
+        bindValue(cfg, key, a, &f.Get(*out))?
+    }
+}
+
+// fieldKey is the configuration key of a struct field.
+func fieldKey(f *reflect.FieldInfo) string {
+    var a = f.Attribute<Conf>()
+    if a != nil && a.name != "" {
+        return a.name
+    }
+    var j = f.Attribute<json>()
+    if j != nil && j.name != "" {
+        return j.name
+    }
+    return f.Name
+}
+
+func bindValue<T>(cfg *Config, key string, a *Conf, out *T) void! {
+    if reflect.TypeOf<T>() == reflect.TypeOf<time.Duration>() {
+        bindScalar(cfg, key, a, out)?
+    } else if reflect.TypeOf<T>().Kind == reflect.Kind.Struct {
+        bindStruct(cfg, key, out)?
+    } else if reflect.TypeOf<T>().Kind == reflect.Kind.Slice {
+        bindSlice(cfg, key, a, out)?
+    } else if reflect.TypeOf<T>().Kind == reflect.Kind.Map {
+        if reflect.TypeOf<T>().Key.Kind == reflect.Kind.String {
+            bindMap(cfg, key, out)?
+        } else {
+            return errors.Wrap(ErrUnsupported, key + ": map keys must be strings")
+        }
+    } else {
+        bindScalar(cfg, key, a, out)?
+    }
+}
+
+func bindScalar<T>(cfg *Config, key string, a *Conf, out *T) void! {
+    var value string
+    if cfg.Has(key) {
+        value = cfg.GetString(key)
+    } else if a != nil && a.default != "" {
+        value = a.default
+    } else if a != nil && a.required {
+        return errors.Wrap(ErrMissing, strconv.Quote(key))
+    } else {
+        return
+    }
+    if a != nil && a.oneOf != "" {
+        value = checkOneOf(key, value, a.oneOf)?
+    }
+    parseScalar(key, value, out)?
+}
+
+// checkOneOf returns the canonical spelling of value from the
+// comma-separated list allowed, or an ErrEnum error.
+func checkOneOf(key string, value string, allowed string) string! {
+    var options = splitList(allowed)
+    for o in options {
+        if strings.EqualFold(o, strings.Trim(value)) {
+            return o
+        }
+    }
+    return keyError(ErrEnum, key, value, "allowed: " + strings.Join(options, ", "))
+}
+
+func splitList(s string) []string {
+    var out []string = []
+    for part in strings.Split(s, ",") {
+        var p = strings.Trim(part)
+        if p != "" {
+            out = append(out, p)
+        }
+    }
+    return out
+}
+
+func parseScalar<T>(key string, value string, out *T) void! {
+    if reflect.TypeOf<T>() == reflect.TypeOf<time.Duration>() {
+        *out = try time.ParseDuration(strings.Trim(value)) catch err {
+            return keyError(ErrParse, key, value, "expected a duration such as 15s")
+        }
+    } else if reflect.TypeOf<T>().Kind == reflect.Kind.String {
+        *out = value
+    } else if reflect.TypeOf<T>().Kind == reflect.Kind.Bool {
+        *out = try strconv.ParseBool(strings.ToLower(strings.Trim(value))) catch err {
+            return keyError(ErrParse, key, value, "expected true or false")
+        }
+    } else if reflect.TypeOf<T>().Kind == reflect.Kind.Int {
+        *out = try strings.ToInt(strings.Trim(value)) catch err {
+            return keyError(ErrParse, key, value, "expected an integer")
+        }
+    } else if reflect.TypeOf<T>().Kind == reflect.Kind.Float {
+        *out = try strings.ToFloat(strings.Trim(value)) catch err {
+            return keyError(ErrParse, key, value, "expected a number")
+        }
+    } else {
+        return errors.Wrap(ErrUnsupported, strconv.Quote(key) + ": " + reflect.TypeOf<T>().Name)
+    }
+}
+
+func bindSlice<E>(cfg *Config, key string, a *Conf, out *[]E) void! {
+    var children = indexChildren(cfg, key)
+    if len(children) > 0 {
+        bindElems(cfg, key, children, out)?
+        return
+    }
+    // A scalar "a,b,c" (or the default) is the list of elements.
+    var text = ""
+    if cfg.Has(key) {
+        text = cfg.GetString(key)
+    } else if a != nil && a.default != "" {
+        text = a.default
+    } else {
+        return
+    }
+    var tmp = Config.New()
+    for i, part in splitList(text) {
+        tmp.Set(strconv.Itoa(i), part)
+    }
+    bindElems(&tmp, "", indexChildren(&tmp, ""), out)?
+}
+
+func bindElems<E>(cfg *Config, base string, children []string, out *[]E) void! {
+    var res []E = []
+    for c in children {
+        var e E
+        bindValue(cfg, JoinKey(base, c), nil, &e)?
+        res = append(res, e)
+    }
+    *out = res
+}
+
+// indexChildren returns the numeric children of key in numeric order;
+// gaps collapse ("servers:0", "servers:5" -> two elements).
+func indexChildren(cfg *Config, key string) []string {
+    var out []string = []
+    for c in cfg.GetChildren(key) {
+        if isIndex(c) {
+            out = append(out, c)
+        }
+    }
+    return out
+}
+
+func bindMap<V>(cfg *Config, key string, out *map[string]V) void! {
+    var children = cfg.GetChildren(key)
+    if len(children) == 0 {
+        return
+    }
+    var m = map[string]V{}
+    for c in children {
+        var v V
+        bindValue(cfg, JoinKey(key, c), nil, &v)?
+        m[c] = v
+    }
+    *out = m
+}

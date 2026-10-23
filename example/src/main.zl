@@ -1,0 +1,41 @@
+// A service configured from appsettings.yaml, an optional local override,
+// a .env file, APP_* environment variables and the command line.
+namespace demo
+
+import io
+
+import zconf
+
+struct Server {
+    Host string
+    Port int
+}
+
+struct Database {
+    @Conf(default: "localhost", help: "database host") Host string
+    @Conf(default: "5432", help: "database port")      Port int
+}
+
+struct Settings {
+    @Conf(default: "app", help: "service name")                               Name    string
+    @Conf(oneOf: "debug,info,warn,error", default: "info", help: "log level") Level   string
+    @Conf(default: "30s", help: "request timeout")                            Timeout time.Duration
+    Database Database
+    Servers  []Server
+}
+
+func main() void! {
+    var b = zconf.NewBuilder()
+    b.AddYamlFile("appsettings.yaml", false).AddYamlFile(
+        "appsettings.local.yaml",
+        true,
+    ).AddDotEnvFile(".env", "APP_", true).AddEnvironmentVariables("APP_")
+    var s = zconf.Load<Settings>(b, os.Args()[1..])?("configuration")
+    println("name:    ", s.Name)
+    println("level:   ", s.Level)
+    println("timeout: ", s.Timeout.String())
+    println("database:", s.Database.Host + ":" + strconv.Itoa(s.Database.Port))
+    for i, srv in s.Servers {
+        println(fmt.Format("server {0}: {1}:{2}", i, srv.Host, srv.Port))
+    }
+}
